@@ -207,6 +207,8 @@ app.use((req, res, next) => {
   next();
 });
 
+ai.models.listModels().then(models => console.log(models));
+
 app.listen(PORT, () => {
   console.log(`Sukces! Serwer TravelBuddy AI działa na porcie: ${PORT}`);
 });
