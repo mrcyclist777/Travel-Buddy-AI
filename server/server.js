@@ -50,7 +50,7 @@ app.post('/api/plan', async (req, res) => {
     }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-flash-latest',
+      model: 'gemini-1.5-flash',
       contents: prompt,
       config: {
         systemInstruction: 'Jesteś doświadczonym, profesjonalnym przewodnikiem turystycznym. Generujesz odpowiedzi tylko jako czysty format JSON.',
@@ -206,8 +206,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-ai.models.listModels().then(models => console.log(models));
 
 app.listen(PORT, () => {
   console.log(`Sukces! Serwer TravelBuddy AI działa na porcie: ${PORT}`);
