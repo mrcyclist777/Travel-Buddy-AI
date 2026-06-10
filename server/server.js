@@ -195,13 +195,10 @@ app.put('/api/update-plan/:id', (req, res) => {
 
 // SERWOWANIE PLIKÓW STATYCZNYCH (Bezpieczny Middleware unika błędów path-to-regexp)
 const __dirname = path.resolve();
-app.use(express.static(path.join(__dirname, 'client/dist')));
+app.use(express.static(path.join(__dirname, '../client/dist')));
 
-app.use((req, res, next) => {
-  if (!req.path.startsWith('/api')) {
-    return res.sendFile(path.join(__dirname, 'client/dist/index.html'));
-  }
-  next();
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/dist/index.html'));
 });
 
 app.listen(PORT, () => {
