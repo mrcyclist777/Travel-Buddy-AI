@@ -50,7 +50,7 @@ app.post('/api/plan', async (req, res) => {
     }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-flash-latest',
+      model: 'gemini-1.5-flash',
       contents: prompt,
       config: {
         systemInstruction: 'Jesteś doświadczonym, profesjonalnym przewodnikiem turystycznym. Generujesz odpowiedzi tylko jako czysty format JSON.',
