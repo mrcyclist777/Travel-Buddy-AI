@@ -62,7 +62,7 @@ app.post('/api/plan', async (req, res) => {
     const planJson = JSON.parse(cleanText);
 
     // UNSPLASH API
-    const UNSPLASH_ACCESS_KEY = "qHotu62xlMHthF3y16oP7scY_Cxjk6vLnKrjBrHIWv8";
+    const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY;
     let destinationImage = "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1200"; 
 
     try {
@@ -193,8 +193,8 @@ app.put('/api/update-plan/:id', (req, res) => {
   }
 });
 
-// SERWOWANIE PLIKÓW STATYCZNYCH (Bezpieczny Middleware unika błędów path-to-regexp)
-const __dirname = path.resolve();
+app.use(express.static(path.join(__dirname, '../client/dist')));
+
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api')) {
     return res.sendFile(path.join(__dirname, '../client/dist/index.html'));
