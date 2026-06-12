@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "cleanUrls": true,
   "builds": [
     {
       "src": "api/index.js",
@@ -20,14 +19,7 @@
       "dest": "api/index.js"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "client/assets/$1",
-      "continue": true
-    },
-    {
-      "src": "/(.*).(js|css|png|jpg|jpeg|svg|ico|json)",
-      "dest": "client/$1.$2",
-      "continue": true
+      "handle": "filesystem"
     },
     {
       "src": "/(.*)",
