@@ -2,11 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
-import fs from 'fs';
+import pg from 'pg'; 
 import path from 'path';
 import { fileURLToPath } from 'url'; 
 import { dirname } from 'path';      
 
+const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -18,7 +19,19 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Inicjalizacja klienta Gemini AI
+// Połączenie z Neon.tech PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false 
+  }
+});
+
+pool.connect()
+  .then(() => console.log('Połączono pomyślnie z bazą PostgreSQL na Neon.tech!'))
+  .catch(err => console.error('Błąd połączenia z Postgres:', err));
+
+
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.post('/api/plan', async (req, res) => {
@@ -50,7 +63,7 @@ app.post('/api/plan', async (req, res) => {
     }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-001',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         systemInstruction: 'Jesteś doświadczonym, profesjonalnym przewodnikiem turystycznym. Generujesz odpowiedzi tylko jako czysty format JSON.',
@@ -99,47 +112,48 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
-const DATABASE_FILE = path.join(process.cwd(), 'baza_podrozy.json');
-
-const readDatabase = () => {
-  if (!fs.existsSync(DATABASE_FILE)) {
-    return [];
-  }
-  const data = fs.readFileSync(DATABASE_FILE, 'utf8');
-  return JSON.parse(data || '[]');
-};
-
-const writeDatabase = (data) => {
-  fs.writeFileSync(DATABASE_FILE, JSON.stringify(data, null, 2), 'utf8');
-};
-
-// Zapis planu
-app.post('/api/save-plan', (req, res) => {
+app.post('/api/save-plan', async (req, res) => {
   try {
     const newPlan = req.body;
     if (!newPlan || !newPlan.destination) {
       return res.status(400).json({ error: 'Nieprawidłowe dane planu.' });
     }
 
-    const db = readDatabase();
-    const planToSave = {
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString(),
-      ...newPlan
+    const query = `
+      INSERT INTO travel_plans (user_id, destination, days_count, itinerary)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *;
+    `;
+    
+    const { userId, destination, daysCount, ...restDetails } = newPlan;
+
+    const values = [
+      userId || 'anonymous',
+      destination,
+      daysCount || 0,
+      JSON.stringify(restDetails) 
+    ];
+
+    const result = await pool.query(query, values);
+    const savedRow = result.rows[0];
+
+    const responseData = {
+      id: savedRow.id.toString(),
+      createdAt: savedRow.created_at,
+      userId: savedRow.user_id,
+      destination: savedRow.destination,
+      daysCount: savedRow.days_count,
+      ...savedRow.itinerary
     };
 
-    db.push(planToSave);
-    writeDatabase(db);
-
-    res.json({ success: true, message: 'Plan został pomyślnie zapisany!', savedPlan: planToSave });
+    res.json({ success: true, message: 'Plan został pomyślnie zapisany!', savedPlan: responseData });
   } catch (error) {
     console.error('Błąd podczas zapisu do bazy:', error);
     res.status(500).json({ error: 'Nie udało się zapisać planu.' });
   }
 });
 
-// Pobieranie planów po ID użytkownika (Firebase UID)
-app.get('/api/saved-plans', (req, res) => {
+app.get('/api/saved-plans', async (req, res) => {
   try {
     const { userId } = req.query; 
 
@@ -147,28 +161,36 @@ app.get('/api/saved-plans', (req, res) => {
       return res.status(400).json({ error: 'Brak zdefiniowanego identyfikatora użytkownika!' });
     }
 
-    const db = readDatabase();
-    const userPlans = db.filter(plan => plan.userId === userId);
-    res.json(userPlans);
+    const query = 'SELECT * FROM travel_plans WHERE user_id = $1 ORDER BY created_at DESC;';
+    const result = await pool.query(query, [userId]);
+
+    const formattedPlans = result.rows.map(row => ({
+      id: row.id.toString(),
+      createdAt: row.created_at,
+      userId: row.user_id,
+      destination: row.destination,
+      daysCount: row.days_count,
+      ...row.itinerary
+    }));
+
+    res.json(formattedPlans);
   } catch (error) {
     console.error('Błąd podczas pobierania z bazy:', error);
     res.status(500).json({ error: 'Nie udało się pobrać zapisanych planów.' });
   }
 });
 
-// Usuwanie planu po ID
-app.delete('/api/delete-plan/:id', (req, res) => {
+app.delete('/api/delete-plan/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    let db = readDatabase();
-    const initialLength = db.length;
-    db = db.filter(plan => plan.id !== id);
     
-    if (db.length === initialLength) {
+    const query = 'DELETE FROM travel_plans WHERE id = $1 RETURNING *;';
+    const result = await pool.query(query, [id]);
+    
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Nie znaleziono planu o podanym ID.' });
     }
     
-    writeDatabase(db);
     res.json({ success: true, message: 'Plan został usunięty!' });
   } catch (error) {
     console.error('Błąd podczas usuwania z bazy:', error);
@@ -176,39 +198,69 @@ app.delete('/api/delete-plan/:id', (req, res) => {
   }
 });
 
-// Aktualizacja istniejącego planu
-app.put('/api/update-plan/:id', (req, res) => {
+app.put('/api/update-plan/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const updatedData = req.body;
-    let db = readDatabase();
     
-    const index = db.findIndex(plan => plan.id === id);
-    if (index === -1) {
+    const selectQuery = 'SELECT * FROM travel_plans WHERE id = $1;';
+    const selectResult = await pool.query(selectQuery, [id]);
+
+    if (selectResult.rows.length === 0) {
       return res.status(404).json({ error: 'Nie znaleziono planu do edycji.' });
     }
+
+    const currentPlan = selectResult.rows[0];
+    const { destination, daysCount, userId, ...restDetails } = updatedData;
+    const newItinerary = { ...currentPlan.itinerary, ...restDetails };
+
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET destination = $1, days_count = $2, itinerary = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+      RETURNING *;
+    `;
+    const values = [
+      destination || currentPlan.destination,
+      daysCount || currentPlan.days_count,
+      JSON.stringify(newItinerary),
+      id
+    ];
+
+    const updateResult = await pool.query(updateQuery, values);
+    const updatedRow = updateResult.rows[0];
+
+    const responsePlan = {
+      id: updatedRow.id.toString(),
+      createdAt: updatedRow.created_at,
+      updatedAt: updatedRow.updated_at,
+      userId: updatedRow.user_id,
+      destination: updatedRow.destination,
+      daysCount: updatedRow.days_count,
+      ...updatedRow.itinerary
+    };
     
-    db[index] = { ...db[index], ...updatedData, updatedAt: new Date().toISOString() };
-    writeDatabase(db);
-    
-    res.json({ success: true, message: 'Plan został zaktualizowany!', updatedPlan: db[index] });
+    res.json({ success: true, message: 'Plan został zaktualizowany!', updatedPlan: responsePlan });
   } catch (error) {
     console.error('Błąd podczas aktualizacji bazy:', error);
     res.status(500).json({ error: 'Nie udało się zaktualizować planu.' });
   }
 });
 
-// SERWOWANIE PLIKÓW STATYCZNYCH (Bezpieczny Middleware unika błędów path-to-regexp)
-const __dirname = path.resolve();
-app.use(express.static(path.join(__dirname, 'client/dist')));
+app.use(express.static(path.join(__dirname, '../client/dist')));
 
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api')) {
-    return res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+    return res.sendFile(path.join(__dirname, '../client/dist/index.html'));
   }
   next();
 });
 
-// app.listen(PORT, () => {
-//   console.log(`Sukces! Serwer TravelBuddy AI działa na porcie: ${PORT}`);
+
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Sukces! Serwer TravelBuddy AI działa lokalnie na porcie: ${PORT}`);
+  });
+}
+
 export default app;
